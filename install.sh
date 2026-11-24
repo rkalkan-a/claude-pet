@@ -1,16 +1,17 @@
 #!/bin/bash
-# Hooks Claude Code up to Claude Pet and starts it at login. Backs up settings.json first.
+# Hooks Claude Code up to Claude Pet and starts it at login. Backs up settings.json first. Safe to run again.
 set -e
+mkdir -p ~/.claude
+[ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
 cp ~/.claude/settings.json ~/.claude/settings.json.bak-pet
-rm -f ~/.claude/pet/sessions/t*.json
-/opt/homebrew/bin/python3 - <<'EOF'
-import json, os
+python3 - <<'EOF'
+import json, os, sys
 p = os.path.expanduser("~/.claude/settings.json")
 s = json.load(open(p))
-cmd = "/opt/homebrew/bin/python3 ~/.claude/pet/hook.py"
+cmd = f"{sys.executable} ~/.claude/pet/hook.py"  # the python3 that ran this installer
 hooks = s.setdefault("hooks", {})
 for ev in ["UserPromptSubmit", "PreToolUse", "Notification", "Stop", "SubagentStop", "SessionEnd", "PermissionRequest"]:
-    if any(cmd in h.get("command", "") for e in hooks.get(ev, []) for h in e.get("hooks", [])):
+    if any("pet/hook.py" in h.get("command", "") for e in hooks.get(ev, []) for h in e.get("hooks", [])):
         continue  # already installed
     h = {"type": "command", "command": cmd}
     if ev == "PermissionRequest": h["timeout"] = 600
@@ -18,7 +19,7 @@ for ev in ["UserPromptSubmit", "PreToolUse", "Notification", "Stop", "SubagentSt
     if ev in ("PreToolUse", "PermissionRequest"): entry["matcher"] = "*"
     hooks.setdefault(ev, []).append(entry)
 json.dump(s, open(p, "w"), indent=2)
-print("hooks added:", list(hooks))
+print("Claude Code hooks installed:", ", ".join(hooks))
 EOF
 cat > ~/Library/LaunchAgents/com.claudepet.plist <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -29,7 +30,7 @@ cat > ~/Library/LaunchAgents/com.claudepet.plist <<PLIST
 <key>RunAtLoad</key><true/>
 </dict></plist>
 PLIST
-pkill ClaudePet || true
+pkill -f ClaudePet.app || true
 launchctl unload ~/Library/LaunchAgents/com.claudepet.plist 2>/dev/null || true
 launchctl load ~/Library/LaunchAgents/com.claudepet.plist
-echo "Claude Pet installed. New Claude sessions will show up top-right."
+echo "Claude Pet installed. Sessions you start from now on show up in the top-right corner."

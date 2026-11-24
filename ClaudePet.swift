@@ -15,7 +15,7 @@ struct Session: Codable {
         state == "working" && (agents ?? []).isEmpty && Date().timeIntervalSince1970 - ts > 600 ? "stuck" : state
     }
 }
-struct Request: Codable { let id, session, project, tool, summary, detail: String; let ts: Double; let always: String? }
+struct Request: Codable { let id, session, project, tool, summary, detail: String; let ts: Double; let always: String?; let questions: String? }
 
 func loadDir<T: Decodable>(_ dir: String) -> [T] {
     let url = root.appendingPathComponent(dir)
@@ -95,7 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             if let v = s.started { r["started"] = v }
             if let v = s.finished { r["finished"] = v }
             if let q = reqs.first(where: { $0.session == s.id }) {
-                r["req"] = ["id": q.id, "tool": q.tool, "summary": q.summary, "detail": q.detail, "always": q.always ?? ""]
+                r["req"] = ["id": q.id, "tool": q.tool, "summary": q.summary, "detail": q.detail, "always": q.always ?? "",
+                            "questions": q.questions ?? ""]
             }
             return r
         }
@@ -120,7 +121,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let id = msg["id"] as? String, let b = msg["behavior"] as? String,
                   ["allow", "always", "deny", "ask"].contains(b) else { return }
             let url = root.appendingPathComponent("responses/\(id).json")
-            try? JSONSerialization.data(withJSONObject: ["behavior": b]).write(to: url, options: .atomic)
+            var resp: [String: Any] = ["behavior": b]
+            if let answers = msg["answers"] as? [String: String], !answers.isEmpty { resp["answers"] = answers }
+            try? JSONSerialization.data(withJSONObject: resp).write(to: url, options: .atomic)
             if b == "ask" { openSession(msg["session"] as? String) }
         case "open":
             openSession(msg["session"] as? String)
@@ -141,7 +144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         defer { primed = true }  // first pass only records what's already there
         for q in reqs where !seenReqs.contains(q.id) {
             seenReqs.insert(q.id)
-            if primed { alert(sound: "Funk", title: "\(q.project) needs approval", body: q.summary, session: q.session) }
+            if primed { alert(sound: "Funk", title: "\(q.project) \(q.questions?.isEmpty == false ? "has a question" : "needs approval")",
+                             body: q.summary, session: q.session) }
         }
         for s in sessions {
             let state = s.live, old = lastState[s.id]

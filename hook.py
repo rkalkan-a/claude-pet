@@ -151,25 +151,39 @@ def main():
         detail = inp.get("command") or inp.get("file_path") or inp.get("url") or json.dumps(inp)[:400]
         sugs = ev.get("permission_suggestions") or []
         write_json(os.path.join(ROOT, "last-permission-request.json"), ev)  # for debugging the format
-        status("approval", "Wants to use " + tool)
+        questions = inp.get("questions") if tool == "AskUserQuestion" else None
+        status("approval", "Has a question" if questions else "Wants to use " + tool)
         rpath, apath = os.path.join(REQ, rid + ".json"), os.path.join(RESP, rid + ".json")
         write_json(rpath, {"id": rid, "session": sid, "project": project, "tool": tool,
-                           "summary": describe(tool, inp), "detail": str(detail)[:400], "ts": time.time(),
-                           "always": rule_label(sugs)})
+                           "summary": questions[0].get("question", "")[:200] if questions else describe(tool, inp),
+                           "detail": "" if questions else str(detail)[:400], "ts": time.time(), "always": rule_label(sugs),
+                           # AskUserQuestion: the pet shows the real question + options instead of yes/no
+                           "questions": json.dumps(questions) if questions else ""})
         answer = None
         try:
             end = time.time() + WAIT_SECONDS
             while time.time() < end:
                 if os.path.exists(apath):
                     with open(apath) as f:
-                        answer = json.load(f).get("behavior")
+                        resp = json.load(f)
+                    answer = resp.get("behavior")
                     os.remove(apath)
                     break
                 time.sleep(0.3)
         finally:
             if os.path.exists(rpath):
                 os.remove(rpath)
-        if answer in ("allow", "always", "deny"):
+        answers = resp.get("answers") if answer else None
+        if questions and answer == "allow" and isinstance(answers, dict) and answers:
+            # same field Claude's own question UI fills in: question text -> chosen label (multi-select comma-separated)
+            status("working", "Answered — continuing")
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {
+                "behavior": "allow", "updatedInput": {**inp, "answers": {str(k): str(v) for k, v in answers.items()}}}}}))
+        elif questions and answer == "deny":
+            status("working", "Skipped question")
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {
+                "behavior": "deny", "message": "The user skipped this question from the desktop pet. Continue with your best judgment."}}}))
+        elif not questions and answer in ("allow", "always", "deny"):
             status("working", "Denied" if answer == "deny" else "Approved — continuing")
             decision = {"behavior": "deny" if answer == "deny" else "allow"}
             if answer == "always" and sugs:

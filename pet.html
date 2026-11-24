@@ -53,6 +53,21 @@
   .opt { cursor: pointer; color: var(--fg); padding-left: 2.4em; text-indent: -2.4em; word-break: break-word; }
   .opt.sel { color: var(--perm); }
   .hint { color: var(--dim); font-size: 9.5px; margin-top: 4px; }
+  /* AskUserQuestion: the agent's real question and options */
+  .qh { display: inline-block; color: var(--bg); background: var(--perm); border-radius: 3px; padding: 0 5px; font-size: 9.5px; font-weight: 700; }
+  .qq { margin: 4px 0 5px; white-space: normal; }
+  .qo { cursor: pointer; padding: 2px 0 2px 1.8em; text-indent: -1.8em; }
+  .qo:hover, .qo.sel { color: var(--perm); }
+  .qd { color: var(--dim); font-size: 10px; text-indent: 0; }
+  .qin { width: 100%; margin: 3px 0 2px; background: #0f0f0e; color: var(--fg); border: 1px solid var(--line); border-radius: 5px;
+    font: inherit; padding: 3px 6px; outline: none; -webkit-user-select: text; }
+  .qin:focus { border-color: var(--perm); }
+  .qsep { border-top: 1px dashed var(--line); margin: 7px 0 5px; }
+  .qbtns { display: flex; gap: 6px; justify-content: flex-end; margin-top: 7px; }
+  .qbtns span { cursor: pointer; padding: 1px 8px; border-radius: 5px; border: 1px solid var(--line); color: var(--dim); }
+  .qbtns span:hover { color: var(--fg); border-color: var(--dim); }
+  .qbtns .go { color: var(--bg); background: var(--perm); border-color: var(--perm); font-weight: 700; }
+  .qbtns .go.off { opacity: .35; pointer-events: none; }
 </style>
 <div id="root">
   <div id="bar" class="click"><span class="spin" style="color:var(--orange)">✻</span><span id="barText">claude</span><span id="dots"></span></div>
@@ -103,18 +118,20 @@
     let tm = "";
     if (m === "done" && s.started && s.finished) tm = dur(s.finished - s.started);
     else if (m !== "done" && s.started) tm = dur(now - s.started);
-    let h = `<div class="l1 click" data-act="row">${glyph}<span class="ttl">${esc(s.title)}</span><span class="tm">${tm}</span></div>`;
+    const head = `<div class="l1 click" data-act="row">${glyph}<span class="ttl">${esc(s.title)}</span><span class="tm">${tm}</span></div>`;
+    let h = "";
 
     if (m === "approval") {
       const q = s.req;
-      if (openId === s.id) {
+      if (openId === s.id && q.questions) h += questionCard(r, q);
+      else if (openId === s.id) {
         const opts = options(q);
         h += `<div class="perm"><div class="ph">${esc(q.tool)} ${q.tool === "Bash" ? "command" : "request"}</div>
           <div class="pc">${esc(q.detail)}</div>${q.summary ? `<div class="pd">${esc(q.summary)}</div>` : ""}
           <div class="pq">Do you want to proceed?</div>
           ${opts.map(([b, label], i) => `<div class="opt${i === sel ? " sel" : ""}" data-act="opt" data-b="${b}" data-i="${i}">${i === sel ? "❯" : "&nbsp;"} ${i + 1}. ${label}</div>`).join("")}
           <div class="hint">click, or 1–${opts.length} · ↑↓ enter · esc = no</div></div>`;
-      } else h += `<div class="l2">⎿&nbsp; <span class="k">Needs approval · ${esc(q.tool)}</span> — click to answer</div>`;
+      } else h += `<div class="l2">⎿&nbsp; <span class="k">${q.questions ? "Has a question" : "Needs approval · " + esc(q.tool)}</span> — click to answer</div>`;
     } else if (m === "done") {
       h += `<div class="l2">⎿&nbsp; <span style="color:var(--green)">✓ Done</span>${tm ? " in " + tm : ""}</div>`;
       if (s.text) h += `<div class="sum">${esc(s.text)}</div>`;
@@ -125,7 +142,47 @@
     }
     if ((s.agents || []).length)
       h += `<div class="l2">&nbsp;&nbsp;&nbsp;↳ ${s.agents.length} agent${s.agents.length > 1 ? "s" : ""} · ${esc(s.agents.join(", "))}</div>`;
-    return h;
+    return [head, h];
+  }
+
+  // ---------- questions (AskUserQuestion) ----------
+  const qsOf = (q) => { try { return JSON.parse(q.questions) || []; } catch { return []; } };
+  function qState(r, q) {   // your picks, kept per request so re-renders don't lose them
+    if (r.qa?.id !== q.id) r.qa = { id: q.id, pick: {}, text: {} };
+    return r.qa;
+  }
+  const isText = (x) => x.kind === "text" || x.kind === "number" || !(x.options || []).length;
+  function answersOf(r, q) {
+    const st = qState(r, q), out = {};
+    qsOf(q).forEach((x, i) => {
+      const picks = (st.pick[i] || []).map((p) => (p === "__other__" ? (st.text[i] || "").trim() : p)).filter(Boolean);
+      const v = isText(x) ? (st.text[i] || "").trim() : picks.join(", ");
+      if (v) out[x.question] = v;
+    });
+    return out;
+  }
+  function questionCard(r, q) {
+    const st = qState(r, q), qs = qsOf(q);
+    const done = Object.keys(answersOf(r, q)).length === qs.length;
+    return `<div class="perm">` + qs.map((x, i) => {
+      const picks = st.pick[i] || [], multi = !!x.multiSelect;
+      const mark = (on) => (multi ? (on ? "[x]" : "[ ]") : on ? "❯" : "&nbsp;");
+      let h = (i ? `<div class="qsep"></div>` : "") + (x.header ? `<span class="qh">${esc(x.header)}</span>` : "") +
+        `<div class="qq">${esc(x.question)}</div>`;
+      if (isText(x)) return h + `<input class="qin" data-q="${i}" type="${x.kind === "number" ? "number" : "text"}" placeholder="Type your answer">`;
+      h += x.options.map((o, j) => `<div class="qo${picks.includes(o.label) ? " sel" : ""}" data-act="qopt" data-q="${i}" data-v="${esc(o.label)}">${mark(picks.includes(o.label))} ${j + 1}. ${esc(o.label)}${o.description ? `<div class="qd">${esc(o.description)}</div>` : ""}</div>`).join("");
+      const other = picks.includes("__other__");
+      h += `<div class="qo${other ? " sel" : ""}" data-act="qopt" data-q="${i}" data-v="__other__">${mark(other)} ${x.options.length + 1}. Other</div>`;
+      if (other) h += `<input class="qin" data-q="${i}" placeholder="Type your answer">`;
+      return h;
+    }).join("") + `<div class="qbtns"><span data-act="qbtn" data-b="deny" title="Esc">Skip</span><span data-act="qbtn" data-b="ask">In app</span>
+      <span class="go${done ? "" : " off"}" data-act="qbtn" data-b="allow" title="Return">Submit</span></div></div>`;
+  }
+  function fillInputs(r) {   // put typed text back after a re-render, and focus the first empty box
+    const st = r.qa; if (!st) return;
+    r.el.querySelectorAll(".qin").forEach((inp) => { inp.value = st.text[inp.dataset.q] || ""; });
+    const empty = [...r.el.querySelectorAll(".qin")].find((i) => !i.value);
+    if (empty && r.focusNext) { empty.focus(); r.focusNext = false; }
   }
 
   window.update = function (sessions) {
@@ -137,6 +194,7 @@
       if (!r) {
         r = { el: document.createElement("div"), mood: "" };
         r.el.dataset.id = s.id;
+        r.el.innerHTML = `<div class="bh"></div><div class="bb"></div>`;
         $("body").appendChild(r.el);   // new sessions go last; existing ones never move
         rows.set(s.id, r);
       }
@@ -159,7 +217,11 @@
       const open = wantsOpen(r);
       anyOpen ||= open;
       r.el.className = "blk " + r.mood + (open ? "" : " hidden");
-      if (open) { const h = blockHTML(r); if (h !== r.html) { r.el.innerHTML = h; r.html = h; } }
+      if (open) {
+        const [hd, bd] = blockHTML(r);
+        setHTML(r.el.firstChild, hd);
+        if (bd !== r.html) { r.el.lastChild.innerHTML = bd; r.html = bd; fillInputs(r); }
+      }
       if (r.mood === "working") counts.working++; else if (r.mood === "done") counts.done++; else counts.needs++;
       const c = { working: "var(--orange)", done: "var(--green)", approval: "var(--red)" }[r.mood] || "var(--yellow)";
       dots += `<span style="color:${c}" title="${esc(r.session.title)} — ${esc(r.session.text)}">⏺</span>`;
@@ -176,12 +238,12 @@
   }
   setInterval(layout, 1000);  // ticks timers and lets finished sessions fold away on their own
 
-  function answer(id, behavior) {
+  function answer(id, behavior, answers) {
     const r = rows.get(id), q = r?.session.req;
     if (!q) return;
-    post({ type: "answer", id: q.id, behavior, session: id });
+    post({ type: "answer", id: q.id, behavior, session: id, answers: answers || {} });
     dismissed.add(q.id); openId = null;
-    r.session = { ...r.session, req: null, text: behavior === "deny" ? "Denied" : behavior === "ask" ? "Answer in the app" : "Approved — continuing" };
+    r.session = { ...r.session, req: null, text: behavior === "ask" ? "Answer in the app" : q.questions ? (behavior === "deny" ? "Skipped question" : "Answered — continuing") : behavior === "deny" ? "Denied" : "Approved — continuing" };
     r.mood = "working";   // until the next status update arrives
     layout();
   }
@@ -193,12 +255,35 @@
     if (!blk || !act) return;
     const id = blk.dataset.id, r = rows.get(id);
     if (act.dataset.act === "opt") return answer(id, act.dataset.b);
+    if (act.dataset.act === "qopt") {
+      const q = r.session.req, st = qState(r, q), i = act.dataset.q, x = qsOf(q)[i], v = act.dataset.v;
+      const cur = st.pick[i] || [];
+      st.pick[i] = x.multiSelect ? (cur.includes(v) ? cur.filter((c) => c !== v) : [...cur, v]) : [v];
+      r.focusNext = v === "__other__";
+      return layout();
+    }
+    if (act.dataset.act === "qbtn") return submitQ(id, act.dataset.b);
     if (r.session.req) {
       if (openId === id) { dismissed.add(r.session.req.id); openId = null; } else { openId = id; sel = 0; }
       return layout();
     }
     r.ack = true; showAll = false; layout();   // go to that project and fold back up
     post({ type: "open", session: id });
+  });
+  function submitQ(id, b) {
+    const r = rows.get(id), q = r?.session.req;
+    if (!q) return;
+    if (b !== "allow") return answer(id, b);
+    const a = answersOf(r, q);
+    if (Object.keys(a).length === qsOf(q).length) answer(id, "allow", a);
+  }
+  $("body").addEventListener("input", (e) => {   // typing never re-renders, so focus and text stay put
+    const inp = e.target.closest(".qin"), blk = e.target.closest(".blk");
+    if (!inp || !blk) return;
+    const r = rows.get(blk.dataset.id);
+    qState(r, r.session.req).text[inp.dataset.q] = inp.value;
+    const go = r.el.querySelector(".qbtns .go");
+    go?.classList.toggle("off", Object.keys(answersOf(r, r.session.req)).length !== qsOf(r.session.req).length);
   });
   $("body").addEventListener("mouseover", (e) => {
     const o = e.target.closest(".opt");
@@ -215,6 +300,11 @@
   addEventListener("keydown", (e) => {
     const r = openId && rows.get(openId);
     if (!r?.session.req) return;
+    if (r.session.req.questions) {   // question card: Return submits, Esc skips; typing goes to the text boxes
+      if (e.key === "Enter") { e.preventDefault(); submitQ(openId, "allow"); }
+      else if (e.key === "Escape") { e.preventDefault(); submitQ(openId, "deny"); }
+      return;
+    }
     const opts = options(r.session.req);
     if (e.key === "ArrowDown") sel = (sel + 1) % opts.length;
     else if (e.key === "ArrowUp") sel = (sel + opts.length - 1) % opts.length;
@@ -237,7 +327,7 @@
 
   // drag the whole pet around (the web view owns the mouse, so the window can't be dragged by its background)
   let down = null, dragged = false;
-  addEventListener("mousedown", (e) => { if (e.button === 0 && !e.target.closest(".opt,.pc")) { down = { x: e.screenX, y: e.screenY }; dragged = false; } });
+  addEventListener("mousedown", (e) => { if (e.button === 0 && !e.target.closest(".opt,.pc,.qo,.qin,.qbtns")) { down = { x: e.screenX, y: e.screenY }; dragged = false; } });
   addEventListener("mousemove", (e) => {
     if (!down || !(e.buttons & 1)) return;
     const dx = e.screenX - down.x, dy = e.screenY - down.y;

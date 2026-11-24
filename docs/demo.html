@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Claude Pet demo</title>
+<!-- Renders pet.html with made-up sessions for README screenshots: demo.html?view=bar|all|approve -->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    background: radial-gradient(120% 90% at 20% 10%, #3b4a6b 0%, #1f2638 45%, #12151f 100%); }
+  iframe { position: absolute; top: 14px; right: 14px; border: 0; width: 420px; height: 600px; background: transparent; }
+</style>
+<iframe id="pet" src="../pet.html"></iframe>
+<script>
+  const now = Date.now() / 1000;
+  const sessions = [
+    { id: "a", title: "checkout-redesign", state: "working", text: "Running: npm test -- checkout", ts: now - 3,
+      started: now - 252, agents: ["Write e2e tests", "Audit a11y"] },
+    { id: "b", title: "api-rate-limiter", state: "done", ts: now - 20, started: now - 415, finished: now - 20,
+      text: "Added a token-bucket limiter to /api/*. 4 files changed, all 62 tests pass." },
+    { id: "c", title: "docs-site", state: "working", text: "Editing getting-started.md", ts: now - 1, started: now - 48, agents: [] },
+  ];
+  const approve = { id: "d", title: "mobile-app", state: "approval", text: "Wants to use Bash", ts: now, started: now - 133, agents: [],
+    req: { id: "r1", tool: "Bash", summary: "Running: Install dependencies", detail: "npm install react-native-reanimated",
+           always: "Bash(npm install:*) in this project" } };
+  const question = { id: "q", title: "trading-bot", state: "approval", text: "Has a question", ts: now, started: now - 61, agents: [],
+    req: { id: "r2", tool: "AskUserQuestion", summary: "How long should the bot wait at each price before stepping?", detail: "", always: "",
+      questions: JSON.stringify([{ header: "Reprice", multiSelect: false,
+        question: "Paper order repricing: your profile says limit at mid, step $0.01, at most 3 steps. How long should the bot wait at each price before stepping?",
+        options: [{ label: "2 min per step, then cancel (Recommended)", description: "Step $0.01 up to 3 times, 2 min each; still unfilled after ~8 min → cancel." },
+                  { label: "1 min per step, then cancel", description: "Faster: ~4 min total before cancelling." },
+                  { label: "Mid only, 2 min, then cancel", description: "Never step: one try at mid, then cancel." }] }]) } };
+  const view = new URLSearchParams(location.search).get("view") || "all";
+  document.getElementById("pet").addEventListener("load", (e) => {
+    const w = e.target.contentWindow;
+    w.__posted = [];  // stands in for the app: records what the pet would send back
+    w.webkit = { messageHandlers: { pet: { postMessage: (m) => w.__posted.push(m) } } };
+    if (view === "question") w.update([sessions[0], question]);
+    else if (view === "approve") w.update([sessions[0], approve, sessions[2]]);
+    else if (view === "bar") w.update([sessions[0], { ...sessions[1], state: "working", text: "Thinking…" }, sessions[2]]);
+    else { w.update(sessions); w.toggleAll(); }
+  });
+</script>
