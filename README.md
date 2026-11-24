@@ -54,7 +54,7 @@ cd claude-pet
 bash ~/.claude/pet/install.sh    # adds the hooks to ~/.claude/settings.json and starts the pet at login
 ```
 
-Sessions you start after installing will show up in the top-right corner. macOS will ask once whether Claude Pet may send notifications.
+Sessions you start after installing will show up in the bottom-right corner. macOS will ask once whether Claude Pet may send notifications.
 
 **Uninstall:** restore `~/.claude/settings.json.bak-pet` (or delete the hooks that mention `pet/hook.py`), delete `~/Library/LaunchAgents/com.claudepet.plist`, then delete `~/.claude/pet`.
 

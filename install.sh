@@ -33,4 +33,4 @@ PLIST
 pkill -f ClaudePet.app || true
 launchctl unload ~/Library/LaunchAgents/com.claudepet.plist 2>/dev/null || true
 launchctl load ~/Library/LaunchAgents/com.claudepet.plist
-echo "Claude Pet installed. Sessions you start from now on show up in the top-right corner."
+echo "Claude Pet installed. Sessions you start from now on show up in the bottom-right corner."

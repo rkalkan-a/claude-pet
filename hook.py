@@ -151,7 +151,7 @@ def main():
     agents = [a for a in prev.get("agents", []) if time.time() - a.get("t", 0) < 3600]
 
     def status(state, text, **extra):
-        if ev.get("agent_id") and not text.startswith("↳"):
+        if name == "PreToolUse" and ev.get("agent_id") and not text.startswith("↳"):  # only a subagent's own actions
             text = "↳ " + text  # this event came from a subagent, not the main conversation
         data = {"agents": agents, "id": sid, "project": project, "state": state, "text": text[:200], "ts": time.time(),
                 "local": prev.get("local", ""), "title": prev.get("title", ""), "tries": prev.get("tries", 0),

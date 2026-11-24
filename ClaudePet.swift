@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     var panel: Panel!
     var web: PetWebView!
-    var anchor = NSPoint.zero  // top-right corner of the pet; moves when the user drags it
+    var anchor = NSPoint.zero  // bottom-right corner of the pet (it grows upward); moves when the user drags it
     var size = NSSize(width: 60, height: 60)
     var lastJSON = ""
     var sessions: [Session] = []
@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         nc.delegate = self
         nc.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         let vf = NSScreen.main!.visibleFrame
-        anchor = NSPoint(x: vf.maxX - 6, y: vf.maxY - 6)
+        anchor = NSPoint(x: vf.maxX - 6, y: vf.minY + 6)  // bottom-right: clear of notification banners (top-right)
 
         let cfg = WKWebViewConfiguration()
         cfg.userContentController.add(self, name: "pet")
@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .statusBar
+        panel.level = .floating  // above normal windows, but below notification banners so those land on top
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         place()
         panel.orderFrontRegardless()
@@ -195,12 +195,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
 
-    /// Size the panel to the content, pinned at its top-right corner and kept fully on screen.
+    /// Size the panel to the content, pinned at its bottom-right corner and kept fully on screen.
     func place() {
         let vf = (panel.screen ?? NSScreen.main!).visibleFrame
         let x = min(max(anchor.x - size.width, vf.minX), vf.maxX - size.width)
-        let y = min(max(anchor.y - size.height, vf.minY), vf.maxY - size.height)
+        let y = min(max(anchor.y, vf.minY), vf.maxY - size.height)
         panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
-        anchor = NSPoint(x: x + size.width, y: y + size.height)
+        anchor = NSPoint(x: x + size.width, y: y)
     }
 }
