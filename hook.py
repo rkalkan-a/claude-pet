@@ -59,6 +59,42 @@ def last_reply(ev):
     return ""
 
 
+class Transcript:
+    """Notices when a request we're waiting on gets answered somewhere else (e.g. in the Claude app):
+    finds the tool call in the transcript, then watches for its result."""
+
+    def __init__(self, path, tool, inp):
+        self.path, self.tool, self.inp = path, tool, inp
+        self.pos = max(0, os.path.getsize(path) - 2_000_000) if path and os.path.exists(path) else 0
+        self.call_id = None
+        self.caught_up = False  # first read is history: an identical earlier call's result must not count
+
+    def answered_elsewhere(self):
+        if not self.path or not os.path.exists(self.path) or os.path.getsize(self.path) <= self.pos:
+            return False
+        with open(self.path, "rb") as f:
+            f.seek(self.pos)
+            chunk = f.read()
+        end = chunk.rfind(b"\n") + 1  # only whole lines; the rest is read next time
+        self.pos += end
+        for line in chunk[:end].decode("utf-8", "ignore").splitlines():
+            try:
+                content = json.loads(line).get("message", {}).get("content", [])
+            except Exception:
+                continue
+            for c in content if isinstance(content, list) else []:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "tool_use" and c.get("name") == self.tool and c.get("input") == self.inp:
+                    self.call_id = c.get("id")  # latest matching call is ours
+                elif c.get("type") == "tool_result" and self.call_id and c.get("tool_use_id") == self.call_id:
+                    if self.caught_up:
+                        return True
+                    self.call_id = None  # that call was an earlier one, already finished
+        self.caught_up = True
+        return False
+
+
 def rule_label(sugs):
     """Human label for Claude's own 'always allow' suggestions, e.g. 'Bash(npm test:*) for this session'."""
     where = {"session": "this session", "localSettings": "this project", "projectSettings": "this project",
@@ -160,9 +196,13 @@ def main():
                            # AskUserQuestion: the pet shows the real question + options instead of yes/no
                            "questions": json.dumps(questions) if questions else ""})
         answer = None
+        watch = Transcript(ev.get("transcript_path"), tool, inp)
         try:
             end = time.time() + WAIT_SECONDS
             while time.time() < end:
+                if watch.answered_elsewhere():
+                    status("working", "Answered in the app")
+                    break
                 if os.path.exists(apath):
                     with open(apath) as f:
                         resp = json.load(f)
@@ -195,6 +235,10 @@ def main():
 
 
 if __name__ == "__main__":
+    import signal
+    # if Claude stops the hook, still run the cleanup (finally blocks) so no stale prompt stays on screen
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     try:
         main()
     except Exception as e:  # never break Claude because the pet failed
