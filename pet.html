@@ -1,0 +1,253 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Claude Pet</title>
+<style>
+  :root {
+    --bg: #1a1918; --line: #3a3835; --fg: #e8e6e3; --dim: #8b8884; --orange: #d97757;
+    --green: #4eba65; --red: #ff6b80; --yellow: #e2b55a; --perm: #b1b9f9;
+  }
+  html, body { margin: 0; background: transparent; overflow: hidden; -webkit-user-select: none; cursor: default; }
+  * { box-sizing: border-box; }
+  #root { position: absolute; top: 0; right: 0; width: max-content; padding: 4px; display: flex; flex-direction: column;
+    align-items: flex-end; font: 11px/1.45 "SF Mono", ui-monospace, Menlo, monospace; color: var(--fg); }
+  .hidden { display: none !important; }
+
+  /* collapsed: one terminal status line */
+  #bar { display: flex; align-items: center; gap: 7px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 3px 9px; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); white-space: nowrap; }
+  #dots { display: flex; gap: 3px; font-size: 9px; }
+
+  /* expanded: mini terminal window */
+  #term { width: 320px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+  .hdr { display: flex; align-items: center; gap: 6px; padding: 6px 9px; border-bottom: 1px solid var(--line);
+    background: #232220; color: var(--dim); font-size: 10px; }
+  .hdr i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .hdr span { flex: 1; text-align: center; margin-right: 33px; }
+  #body { padding: 6px 9px 8px; max-height: 560px; overflow-y: auto; }
+
+  .blk { padding: 3px 0 4px; }
+  .blk:not(.hidden) ~ .blk:not(.hidden) { border-top: 1px dashed #2c2b29; }
+  .l1 { display: flex; gap: 6px; white-space: nowrap; }
+  .l1 .ttl { flex: 1; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .tm { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .l2 { color: var(--dim); padding-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l2 .k { color: var(--fg); }
+  .sum { color: var(--fg); padding-left: 30px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; }
+  .click { cursor: pointer; }
+  .click:hover .ttl { text-decoration: underline; text-decoration-color: var(--dim); }
+
+  .g { width: 12px; text-align: center; flex: none; }
+  .working .g { color: var(--orange); }
+  .done .g { color: var(--green); }
+  .approval .g, .approval .l2 .k { color: var(--red); }
+  .attention .g, .stuck .g, .stuck .l2 .k, .attention .l2 .k { color: var(--yellow); }
+
+  /* permission prompt, styled after the CLI's own */
+  .perm { margin: 5px 0 2px; border: 1px solid var(--perm); border-radius: 7px; padding: 6px 9px; }
+  .perm .ph { color: var(--perm); font-weight: 700; }
+  .perm .pc { margin: 3px 0 2px 10px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow: auto; -webkit-user-select: text; }
+  .perm .pd { color: var(--dim); margin-left: 10px; }
+  .perm .pq { margin: 6px 0 2px; }
+  .opt { cursor: pointer; color: var(--fg); padding-left: 2.4em; text-indent: -2.4em; word-break: break-word; }
+  .opt.sel { color: var(--perm); }
+  .hint { color: var(--dim); font-size: 9.5px; margin-top: 4px; }
+</style>
+<div id="root">
+  <div id="bar" class="click"><span class="spin" style="color:var(--orange)">✻</span><span id="barText">claude</span><span id="dots"></span></div>
+  <div id="term" class="hidden">
+    <div class="hdr click" title="Click to minimize"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span id="hdrText">claude</span></div>
+    <div id="body"></div>
+  </div>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const post = (m) => window.webkit?.messageHandlers?.pet?.postMessage(m);
+  const rows = new Map();   // session id -> {el, mood, session, doneAt, ack, html}
+  const DONE_SHOW_MS = 3 * 60 * 1000;  // a finished session stays open this long unless you look at it
+  let openId = null, dismissed = new Set(), showAll = false, sel = 0;
+
+  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const moodOf = (s) => (s.req ? "approval" : s.state === "approval" ? "working" : s.state);
+  const setHTML = (el, h) => { if (el.innerHTML !== h) el.innerHTML = h; };
+  const dur = (sec) => {
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 60) return sec + "s";
+    if (sec < 3600) return Math.floor(sec / 60) + "m " + String(sec % 60).padStart(2, "0") + "s";
+    return Math.floor(sec / 3600) + "h " + String(Math.floor(sec / 60) % 60).padStart(2, "0") + "m";
+  };
+
+  // the CLI's spinner glyphs
+  const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+  let spinI = 0;
+  setInterval(() => { spinI = (spinI + 1) % SPIN.length; document.querySelectorAll(".spin").forEach((e) => (e.textContent = SPIN[spinI])); }, 120);
+
+  function wantsOpen(r) {
+    if (showAll) return true;
+    if (r.mood === "approval" || r.mood === "attention" || r.mood === "stuck") return true;
+    return r.mood === "done" && !r.ack && Date.now() - r.doneAt < DONE_SHOW_MS;
+  }
+
+  function options(q) {
+    const o = [["allow", "Yes"]];
+    if (q.always) o.push(["always", `Yes, and don't ask again for <b>${esc(q.always)}</b>`]);
+    o.push(["deny", "No"], ["ask", "Answer in the Claude app"]);
+    return o;
+  }
+
+  function blockHTML(r) {
+    const s = r.session, now = Date.now() / 1000, m = r.mood;
+    const glyph = m === "working" ? `<span class="g spin">${SPIN[spinI]}</span>`
+      : m === "attention" ? `<span class="g">?</span>` : m === "stuck" ? `<span class="g">⚠</span>` : `<span class="g">⏺</span>`;
+    let tm = "";
+    if (m === "done" && s.started && s.finished) tm = dur(s.finished - s.started);
+    else if (m !== "done" && s.started) tm = dur(now - s.started);
+    let h = `<div class="l1 click" data-act="row">${glyph}<span class="ttl">${esc(s.title)}</span><span class="tm">${tm}</span></div>`;
+
+    if (m === "approval") {
+      const q = s.req;
+      if (openId === s.id) {
+        const opts = options(q);
+        h += `<div class="perm"><div class="ph">${esc(q.tool)} ${q.tool === "Bash" ? "command" : "request"}</div>
+          <div class="pc">${esc(q.detail)}</div>${q.summary ? `<div class="pd">${esc(q.summary)}</div>` : ""}
+          <div class="pq">Do you want to proceed?</div>
+          ${opts.map(([b, label], i) => `<div class="opt${i === sel ? " sel" : ""}" data-act="opt" data-b="${b}" data-i="${i}">${i === sel ? "❯" : "&nbsp;"} ${i + 1}. ${label}</div>`).join("")}
+          <div class="hint">click, or 1–${opts.length} · ↑↓ enter · esc = no</div></div>`;
+      } else h += `<div class="l2">⎿&nbsp; <span class="k">Needs approval · ${esc(q.tool)}</span> — click to answer</div>`;
+    } else if (m === "done") {
+      h += `<div class="l2">⎿&nbsp; <span style="color:var(--green)">✓ Done</span>${tm ? " in " + tm : ""}</div>`;
+      if (s.text) h += `<div class="sum">${esc(s.text)}</div>`;
+    } else if (m === "stuck") {
+      h += `<div class="l2">⎿&nbsp; <span class="k">Quiet ${dur(now - s.ts)} · may be stuck</span> — ${esc(s.text)}</div>`;
+    } else {
+      h += `<div class="l2">⎿&nbsp; <span class="k">${esc(s.text)}</span></div>`;
+    }
+    if ((s.agents || []).length)
+      h += `<div class="l2">&nbsp;&nbsp;&nbsp;↳ ${s.agents.length} agent${s.agents.length > 1 ? "s" : ""} · ${esc(s.agents.join(", "))}</div>`;
+    return h;
+  }
+
+  window.update = function (sessions) {
+    const seen = new Set(sessions.map((s) => s.id));
+    for (const [id, r] of rows) if (!seen.has(id)) { r.el.remove(); rows.delete(id); }
+    if (openId && !sessions.some((s) => s.id === openId && s.req)) openId = null;
+    for (const s of sessions) {
+      let r = rows.get(s.id);
+      if (!r) {
+        r = { el: document.createElement("div"), mood: "" };
+        r.el.dataset.id = s.id;
+        $("body").appendChild(r.el);   // new sessions go last; existing ones never move
+        rows.set(s.id, r);
+      }
+      const mood = moodOf(s);
+      if (r.mood !== mood && mood === "done") { r.doneAt = Date.now(); r.ack = false; }
+      r.mood = mood; r.session = s;
+    }
+    // a new approval request opens its prompt by itself, unless you've closed that one already
+    if (!openId) {
+      const r = [...rows.values()].find((r) => r.session.req && !dismissed.has(r.session.req.id));
+      if (r) { openId = r.session.id; sel = 0; }
+    }
+    layout();
+  };
+
+  function layout() {
+    let anyOpen = false, dots = "";
+    const counts = { working: 0, done: 0, needs: 0 };
+    for (const r of rows.values()) {
+      const open = wantsOpen(r);
+      anyOpen ||= open;
+      r.el.className = "blk " + r.mood + (open ? "" : " hidden");
+      if (open) { const h = blockHTML(r); if (h !== r.html) { r.el.innerHTML = h; r.html = h; } }
+      if (r.mood === "working") counts.working++; else if (r.mood === "done") counts.done++; else counts.needs++;
+      const c = { working: "var(--orange)", done: "var(--green)", approval: "var(--red)" }[r.mood] || "var(--yellow)";
+      dots += `<span style="color:${c}" title="${esc(r.session.title)} — ${esc(r.session.text)}">⏺</span>`;
+    }
+    const parts = [];
+    if (counts.needs) parts.push(`<span style="color:var(--red)">${counts.needs} need${counts.needs > 1 ? "" : "s"} you</span>`);
+    if (counts.working) parts.push(`${counts.working} working`);
+    if (counts.done) parts.push(`<span style="color:var(--green)">${counts.done} done</span>`);
+    setHTML($("barText"), rows.size ? parts.join(" · ") : `<span style="color:var(--dim)">claude · idle</span>`);
+    setHTML($("dots"), dots);
+    setHTML($("hdrText"), `claude — ${rows.size} session${rows.size === 1 ? "" : "s"}`);
+    $("term").classList.toggle("hidden", !anyOpen);
+    $("bar").classList.toggle("hidden", anyOpen);
+  }
+  setInterval(layout, 1000);  // ticks timers and lets finished sessions fold away on their own
+
+  function answer(id, behavior) {
+    const r = rows.get(id), q = r?.session.req;
+    if (!q) return;
+    post({ type: "answer", id: q.id, behavior, session: id });
+    dismissed.add(q.id); openId = null;
+    r.session = { ...r.session, req: null, text: behavior === "deny" ? "Denied" : behavior === "ask" ? "Answer in the app" : "Approved — continuing" };
+    r.mood = "working";   // until the next status update arrives
+    layout();
+  }
+
+  // clicks inside the terminal
+  $("body").addEventListener("click", (e) => {
+    if (dragged) return;
+    const blk = e.target.closest(".blk"), act = e.target.closest("[data-act]");
+    if (!blk || !act) return;
+    const id = blk.dataset.id, r = rows.get(id);
+    if (act.dataset.act === "opt") return answer(id, act.dataset.b);
+    if (r.session.req) {
+      if (openId === id) { dismissed.add(r.session.req.id); openId = null; } else { openId = id; sel = 0; }
+      return layout();
+    }
+    r.ack = true; showAll = false; layout();   // go to that project and fold back up
+    post({ type: "open", session: id });
+  });
+  $("body").addEventListener("mouseover", (e) => {
+    const o = e.target.closest(".opt");
+    if (o && +o.dataset.i !== sel) { sel = +o.dataset.i; layout(); }
+  });
+  $("bar").addEventListener("click", () => {
+    if (dragged) return;
+    if (!rows.size) return post({ type: "open", session: null });
+    showAll = true; layout();
+  });
+  document.querySelector(".hdr").addEventListener("click", () => { if (!dragged) collapse(true); });
+
+  // keys work once you've clicked the pet (it never grabs the keyboard on its own)
+  addEventListener("keydown", (e) => {
+    const r = openId && rows.get(openId);
+    if (!r?.session.req) return;
+    const opts = options(r.session.req);
+    if (e.key === "ArrowDown") sel = (sel + 1) % opts.length;
+    else if (e.key === "ArrowUp") sel = (sel + opts.length - 1) % opts.length;
+    else if (e.key === "Enter") return answer(openId, opts[sel][0]);
+    else if (e.key === "Escape") return answer(openId, "deny");
+    else if (/^[1-9]$/.test(e.key) && +e.key <= opts.length) return answer(openId, opts[+e.key - 1][0]);
+    else return;
+    e.preventDefault(); layout();
+  });
+
+  // called by the app when you click anywhere outside the pet (now=false), and by the title bar (now=true).
+  // An open approval prompt survives outside clicks: it popped up while you were busy elsewhere, so it waits for an answer.
+  window.collapse = function (now) {
+    showAll = false;
+    for (const r of rows.values()) if (r.mood === "done" && (now || Date.now() - r.doneAt > 1500)) r.ack = true;  // grace so a fresh ✓ isn't lost to a click already in flight
+    if (now && openId) { const r = rows.get(openId); if (r?.session.req) dismissed.add(r.session.req.id); openId = null; }
+    layout();
+  };
+  window.toggleAll = () => { showAll = !showAll; layout(); };  // from the right-click menu
+
+  // drag the whole pet around (the web view owns the mouse, so the window can't be dragged by its background)
+  let down = null, dragged = false;
+  addEventListener("mousedown", (e) => { if (e.button === 0 && !e.target.closest(".opt,.pc")) { down = { x: e.screenX, y: e.screenY }; dragged = false; } });
+  addEventListener("mousemove", (e) => {
+    if (!down || !(e.buttons & 1)) return;
+    const dx = e.screenX - down.x, dy = e.screenY - down.y;
+    if (!dragged && Math.hypot(dx, dy) < 4) return;
+    dragged = true; down = { x: e.screenX, y: e.screenY };
+    post({ type: "drag", dx, dy });
+  });
+  addEventListener("mouseup", () => { down = null; setTimeout(() => (dragged = false), 0); });
+  addEventListener("contextmenu", (e) => { e.preventDefault(); post({ type: "menu" }); });
+
+  new ResizeObserver(() => post({ type: "size", w: Math.ceil($("root").offsetWidth), h: Math.ceil($("root").offsetHeight) })).observe($("root"));
+  layout();
+</script>
