@@ -178,7 +178,8 @@ def main():
         status("done", last_reply(ev) or "Finished — your turn", finished=time.time())
     elif name == "Notification":
         # permission prompts are handled by PermissionRequest below; this covers "waiting for input" etc.
-        if ev.get("notification_type") != "permission_prompt":
+        # idle_prompt ("waiting for your input") just repeats that Claude finished: keep the ✓ instead
+        if ev.get("notification_type") not in ("permission_prompt", "idle_prompt") and "waiting for your input" not in ev.get("message", ""):
             status("attention", ev.get("message", "Needs your attention"))
     elif name == "PermissionRequest":
         rid = uuid.uuid4().hex

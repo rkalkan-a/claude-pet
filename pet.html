@@ -100,7 +100,8 @@
 
   function wantsOpen(r) {
     if (showAll) return true;
-    if (r.mood === "approval" || r.mood === "attention" || r.mood === "stuck") return true;
+    if (r.mood === "approval") return true;
+    if (r.mood === "attention" || r.mood === "stuck") return !r.ack;  // until you fold it away
     return r.mood === "done" && !r.ack && Date.now() - r.doneAt < DONE_SHOW_MS;
   }
 
@@ -199,7 +200,7 @@
         rows.set(s.id, r);
       }
       const mood = moodOf(s);
-      if (r.mood !== mood && mood === "done") { r.doneAt = Date.now(); r.ack = false; }
+      if (r.mood !== mood && ["done", "attention", "stuck"].includes(mood)) { r.doneAt = Date.now(); r.ack = false; }
       r.mood = mood; r.session = s;
     }
     // a new approval request opens its prompt by itself, unless you've closed that one already
@@ -319,7 +320,7 @@
   // An open approval prompt survives outside clicks: it popped up while you were busy elsewhere, so it waits for an answer.
   window.collapse = function (now) {
     showAll = false;
-    for (const r of rows.values()) if (r.mood === "done" && (now || Date.now() - r.doneAt > 1500)) r.ack = true;  // grace so a fresh ✓ isn't lost to a click already in flight
+    for (const r of rows.values()) if (["done", "attention", "stuck"].includes(r.mood) && (now || Date.now() - r.doneAt > 1500)) r.ack = true;  // grace so a fresh ✓ isn't lost to a click already in flight
     if (now && openId) { const r = rows.get(openId); if (r?.session.req) dismissed.add(r.session.req.id); openId = null; }
     layout();
   };
